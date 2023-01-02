@@ -1,0 +1,4 @@
+bt_wrapped/data/*
+bt_wrapped/key/*
+
+*.session

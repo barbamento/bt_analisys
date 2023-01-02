@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "bt-analisys"
+version = "0.1.0"
+description = ""
+authors = ["barbamento <lorenzo.alvisi@studio.unibo.it>"]
+readme = "README.md"
+packages = [{include = "bt_analisys"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^1.5.2"
+seaborn = "^0.12.2"
+wordcloud = "^1.8.2.2"
+Pyrogram = "^2.0.93"
+Telethon = "^1.26.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
