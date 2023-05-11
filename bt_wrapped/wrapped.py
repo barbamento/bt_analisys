@@ -9,6 +9,8 @@ from key.key import API
 from pyrogram import Client
 from telethon.sync import TelegramClient
 import utils as U
+import ast
+import json
 
 
 def json_to_csv(path: str) -> None:
@@ -16,8 +18,6 @@ def json_to_csv(path: str) -> None:
     Returns a csv of the Telegram messages in the same folder as the json
     """
     df = pd.read_json(path)
-    print(df.columns)
-    print(df.iloc[-1, :])
     df = pd.DataFrame().from_records(df["messages"])
     df.to_csv(path.removesuffix(".json") + ".csv", index=False)
 
@@ -27,7 +27,8 @@ class wrapped:
     channel_csv_path = channel_json_path.removesuffix(".json") + ".csv"
     group_json_path = "bt_wrapped/data/group.json"
     group_csv_path = group_json_path.removesuffix(".json") + ".csv"
-    subscribers=4630
+    subscribers = 4630
+    bt_group_id = -1001155308424
 
     def __init__(self) -> None:
         if not os.path.exists(self.channel_csv_path):
@@ -36,63 +37,84 @@ class wrapped:
             json_to_csv(self.group_json_path)
         self.channel_df = pd.read_csv(self.channel_csv_path, index_col=False)
         self.group_df = pd.read_csv(self.group_csv_path, index_col=False)
-        self.channel_df = self.channel_df[
-            pd.to_datetime(self.channel_df["date"])
-            >= datetime.datetime(2022, 1, 1, 0, 0, 0)
+        self.channel_df = self.channel_df.loc[
+            (
+                pd.to_datetime(self.channel_df["date"])
+                >= datetime.datetime(2022, 1, 1, 0, 0, 0)
+            )
+            & (
+                pd.to_datetime(self.channel_df["date"])
+                < datetime.datetime(2023, 1, 1, 0, 0, 0)
+            )
+            & (self.channel_df["type"] == "message")
+            & (~self.channel_df["id"].isin([20950, 20951]))
         ]
+        new_replies = []
         self.group_df = self.group_df[
-            pd.to_datetime(self.group_df["date"])
-            >= datetime.datetime(2022, 1, 1, 0, 0, 0)
+            (
+                pd.to_datetime(self.group_df["date"])
+                >= datetime.datetime(2022, 1, 1, 0, 0, 0)
+            )
+            & (
+                (
+                    pd.to_datetime(self.group_df["date"])
+                    < datetime.datetime(2023, 1, 1, 0, 0, 0)
+                )
+                | (self.group_df["id"].isin(new_replies))
+            )
+            & (self.group_df["id"] != 534935)
         ]
         self.replies_only()
+        if os.path.exists("temp/channel_df_2.csv"):
+            self.channel_df = pd.read_csv("temp/channel_df.csv", index_col=False)
+        else:
+            self.channel_df_2 = self.replies_df.loc[
+                self.replies_df["id"] == self.replies_df["root"]
+            ]
+            if os.path.exists("tmp.csv"):
+                tmp = pd.read_csv("tmp.csv", index_col=False)
+            else:
+                with Client("pyro_session", API.app_id, API.api_hash) as client:
+                    tmp = (
+                        pd.DataFrame()
+                        .from_records(
+                            self.channel_df_2["id"].apply(
+                                lambda x: U.get_engagement_from_chat_id(
+                                    self.bt_group_id, x, client
+                                )
+                            )
+                        )
+                        .reset_index()
+                    )
+                    tmp.to_csv("tmp.csv", index=False)
+            self.channel_df = pd.concat(
+                [
+                    self.channel_df.rename(
+                        {"id": "id_in_channel"}, axis=1
+                    ).reset_index(),
+                    self.channel_df_2.rename(
+                        {"id": "id_in_group"}, axis=1
+                    ).reset_index(),
+                    self.replies_df.groupby("root")
+                    .size()
+                    .reset_index()
+                    .drop("root", axis=1),
+                    tmp.reset_index(),
+                ],
+                axis=1,
+            ).rename({0: "#_comments"}, axis=1)
+            self.channel_df["total_reactions"] = (
+                pd.DataFrame()
+                .from_records(self.channel_df["reactions"].apply(ast.literal_eval))
+                .sum(axis=1)
+            )
+            print(self.channel_df.columns)
+            self.channel_df["engagement"] = (
+                self.channel_df.loc[:, ["total_reactions", "#_comments"]].sum(axis=1)
+                / self.subscribers
+            )
+            self.channel_df.to_csv("temp/channel_df.csv", index=False)
         print("job's done")
-
-    def most_engaged_post(self):
-        def get_engagement(chat_id: int, message_id: int, client: Client):
-            try:
-                message = client.get_messages(chat_id, message_id)
-                print(message)
-                post_reactions = message.reactions
-                reactions = 0
-                for react in post_reactions.reactions:
-                    reactions += react.count
-                return reactions
-            except:
-                return 0
-
-        with Client("pyro.session", API().app_id, API().api_hash) as pyro:
-            message = pyro.get_messages(chat_id, message_id)
-            print(message)
-
-    def most_replied_posts(self):
-        df = self.replies_df.groupby("root").size().sort_values(ascending=False)
-        most_replied_post = pd.DataFrame(index=df.head(20).index, columns=["link"])
-        most_replied_post["link"] = [
-            "https://t.me/c/1155308424/" + str(i) for i in df.head(20).index
-        ]
-        print(most_replied_post)
-
-    def get_pos(self):
-        def get_reactions_from_post_id(chat_id: int, message_id: int, client: Client):
-            try:
-                message = client.get_messages(chat_id, message_id)
-                post_reactions = message.reactions
-                reactions = {}
-                for react in post_reactions.reactions:
-                    reactions[react.emoji] = react.count
-                return reactions
-            except:
-                return {}
-
-        with Client("pyro.session", API().app_id, API().api_hash) as pyro:
-
-            tmp = self.replies_df[self.replies_df["id"] == self.replies_df["root"]][
-                "id"
-            ].apply(lambda x: get_reactions_from_post_id(-1001155308424, x, pyro))
-        print(tmp)
-
-        # https://t.me/bestimeline/18935
-        # print(get_reactions_from_post_id("bestimeline", 18935))
 
     def most_active_day(self) -> pd.Series:
         df = pd.DataFrame()
@@ -101,60 +123,8 @@ class wrapped:
         print(df.sort_values(ascending=False).head(50).sort_index())
         g = sns.lineplot(data=df)
         g.set_xticklabels(labels=[])
-        plt.savefig("yearly_recap.svg")
+        plt.savefig("plots/yearly_recap.svg")
         return df.sort_values(ascending=False).head(50).sort_index()
-
-    def word_cloud(self, df: pd.DataFrame, filename: str, column: str = "text"):
-        def remove_list(i):
-            with open("bt_wrapped/wordcloud/stopwords.txt", "r") as f:
-                stopwords = f.read().split("\n")
-            if isinstance(i, list):
-                t = ""
-                for j in i:
-                    if isinstance(j, str):
-                        t += j
-                    elif isinstance(j, dict):
-                        if j["type"] not in [
-                            "link",
-                            "text_link",
-                            "code",
-                            "bot_command",
-                            "mention",
-                            "email",
-                            "phone",
-                            "pre",
-                            "cashtag",
-                            "mention_name",
-                            "hashtag",
-                            "bank_card",
-                            "strikethrough",
-                        ]:
-                            t += j["text"]
-                return " ".join(
-                    [
-                        j
-                        for j in re.sub(r"[^\w\s]", "", t).lower().split(" ")
-                        if j not in stopwords
-                    ]
-                )
-            elif isinstance(i, str):
-                return " ".join(
-                    [
-                        j
-                        for j in re.sub(r"[^\w\s]", "", i).lower().split(" ")
-                        if j not in stopwords
-                    ]
-                )
-            else:
-                raise TypeError(f"{i} is of {type(i)}. Not supported")
-
-        df[column] = df[column].fillna("").apply(lambda x: remove_list(x))
-        plt.close()
-        wc = WordCloud(width=800, height=600).generate(
-            re.sub(r"[^\w\s]", "", df[column].sum())
-        )
-        plt.imshow(wc, interpolation="bilinear")
-        wc.to_file(f"bt_wrapped/wordcloud/{filename}.png")
 
     def most_active_time(self):
         df = self.group_df
@@ -166,13 +136,14 @@ class wrapped:
         df = df.groupby("date").size()
         g = sns.lineplot(data=df)
         print(df)
-        plt.savefig("time.pdf")
+        plt.savefig("plots/time.pdf")
 
     def replies_only(self):
-        roots = self.group_df[
-            (self.group_df["from"] == "Best Timeline")
-            & (self.group_df["forwarded_from"] == "Best Timeline")
-        ]
+        """
+        (self.group_df["from"] == "Best Timeline")
+        & (self.group_df["forwarded_from"] == "Best Timeline")
+        """
+        roots = self.group_df[(self.group_df["saved_from"] == "Best Timeline")]
         roots["root"] = roots["id"]
         results = roots
         ids = roots
@@ -186,13 +157,37 @@ class wrapped:
             ids = tmp
             results = pd.concat([results, tmp])
             j += 1
-        self.replies_df = results
+        self.replies_df: pd.DataFrame = results
+
+    def emoticon(self):
+        plt.close()
+        tmp = (
+            pd.DataFrame()
+            .from_records(self.channel_df["reactions"].apply(ast.literal_eval))
+            .sum(axis=0)
+            .sort_values(ascending=False)
+        )
+        print(tmp)
+        tmp.plot.pie(subplots=True, legend=False)
+        plt.savefig("plots/emoticon_pie.svg")
+        plt.savefig("plots/emoticon_pie.png")
+        plt.close()
+
+    def most_engaged_posts(self):
+        print(
+            [
+                f"https://t.me/bestimeline/{i}"
+                for i in self.channel_df.sort_values(
+                    by="engagement", ascending=False
+                ).head(10)["id_in_channel"]
+            ]
+        )
 
     def admins(self):
         admin_posts_raw = (
             self.channel_df.groupby("author").size().sort_values(ascending=False)
         )
-        admin_posts_processed = pd.DataFrame(columns=["value"])
+        admin_posts_processed = pd.DataFrame(columns=["#_posts", "engagement"])
         for i in admin_posts_raw.index:
             if "cat" in i and "drunken" in i:
                 j = "drunken cat"
@@ -205,25 +200,25 @@ class wrapped:
             else:
                 j = i
             if not j in admin_posts_processed.index:
-                admin_posts_processed.loc[j, :] = admin_posts_raw.loc[i]
+                admin_posts_processed.loc[j, ["#_posts"]] = admin_posts_raw.loc[i]
             else:
-                admin_posts_processed.loc[j, :] += admin_posts_raw.loc[i]
+                admin_posts_processed.loc[j, ["#_posts"]] += admin_posts_raw.loc[i]
         print(admin_posts_processed)
         plt.close()
-        admin_posts_processed.plot.pie(subplots=True, legend=False)
-        plt.savefig("bt_wrapped/admins_pie.svg")
+        admin_posts_processed.loc[:, ["#_posts"]].plot.pie(subplots=True, legend=False)
+        plt.savefig("plots/admins_pie.svg")
         plt.close()
-        comments_generated = pd.DataFrame()
-        comments_generated["size"] = self.replies_df.groupby("root").size()
-        comments_generated["text"] = (
-            self.replies_df.loc[:, ["root", "text"]].groupby("root").first()
+        engagement_generated = self.channel_df.loc[:, ["author", "engagement"]]
+        engagement_generated["engagement"] = (
+            engagement_generated["engagement"] * self.subscribers
         )
-        comments_generated = comments_generated.drop_duplicates("text")
-        post_made = self.channel_df.loc[:, ["text", "author"]]
-        post_made = post_made.merge(right=comments_generated, on=["text"], how="inner")
-        post_made = post_made.loc[:, ["author", "size"]].groupby("author").sum()
-        comments_generated = pd.DataFrame(columns=["size"])
-        for i in post_made.index:
+        engagement_generated = engagement_generated.groupby("author")[
+            "engagement"
+        ].sum()
+        # .set_index("author")
+        admin_posts_processed = admin_posts_processed.fillna(0)
+        for i in engagement_generated.index:
+            print(i)
             if "cat" in i and "drunken" in i:
                 j = "drunken cat"
             elif i in ["Pétta️️️️    ", "Pétta", "Pétta️️️️"]:
@@ -234,13 +229,17 @@ class wrapped:
                 j = "Gianni Confuso"
             else:
                 j = i
-            if not j in comments_generated.index:
-                comments_generated.loc[j, :] = post_made.loc[i, "size"]
-            else:
-                comments_generated.loc[j, :] += post_made.loc[i, "size"]
-        print(comments_generated)
+
+            admin_posts_processed.loc[j, ["engagement"]] += engagement_generated.loc[i]
+        admin_posts_processed["engagement_per_post"] = (
+            admin_posts_processed["engagement"] / admin_posts_processed["#_posts"]
+        )
+        print(admin_posts_processed)
 
 
 if __name__ == "__main__":
     w = wrapped()
-    w.most_reacted_post()
+    w.admins()
+    w.most_active_day()
+    w.most_engaged_posts()
+    # w.emoticon()
